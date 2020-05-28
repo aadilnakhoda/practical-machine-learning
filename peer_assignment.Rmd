@@ -1,0 +1,209 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Aadil Nakhoda"
+date: "May 27, 2020"
+output: html_document
+---
+
+#Executive Summary
+With the advent of fitness devices and apps such as *Jawbone Up*, *Nike Fuelband* and *Fitbit*, it is now possible to measure not only how much of an activity people are doing but how well they are doing those activities.This project uses data on accelerometer on belt, forearm, arm and dumbell of 6 participants to predict the manner in which they do the exercise. The following analysis makes use of machine learning models such as random forest, gradient boosting and recursive partitioning and regression trees. The results from the random forest are the most accurate. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(echo = FALSE, tidy.opts=list(width.cutoff=65),tidy=TRUE)
+library(knitr)
+
+hook_output = knit_hooks$get('source')  #this is the output for code
+
+knit_hooks$set(source = function(x, options) {
+  if (!is.null(n <- options$linewidth) & knitr::is_latex_output()) {
+    x <- strwrap(x, width = n, exdent = 4)
+  }
+  hook_output(x, options)
+})
+
+```
+```{r, warning=FALSE, message=FALSE, include=FALSE, results= 'hide'}
+
+#Include the following libraries
+library(caret)
+library(randomForest)
+library(e1071)
+library(parallel)
+library(doParallel)
+library(rattle)
+#To ensure that multiple cores are used to reduce processing time
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+# The verson: 3.5.1 is used for the random number generator. This is consistent with the quizzes attempted in the course.  
+RNGkind()
+RNGversion("3.5.1")
+set.seed(12345678)
+```
+##Loading the data
+The data files available on the course webpage are downloaded into the appropriate directory and then called from that location. **The code is reported at the end of this report**.
+
+
+
+```{r, message=FALSE}
+#Downloading the file, saving into appropriate location
+setwd("E:/Coursera/Practical Machine Learning/Week 4/Assignment/")
+if(!file.exists("./data")){dir.create("./data")
+trainingURL <- 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv'
+download.file(trainingURL,destfile="./data/pml-training.csv")
+projquizURL <-'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv'
+download.file(projquizURL,destfile="./data/pml-testing.csv")}
+```
+##Data Cleaning and Training
+First, the variables containing NA and missing values have been replaced with *NA* in the dataset. The columns containing *NA* variables are then removed from the dataset.  
+```{r, message=FALSE}
+# Read the files for the main peer assessment exercise (training) and the supplement project prediction quiz (projquiz) 
+training <- read.csv("./data/pml-training.csv", na.strings=c("NA", ""), stringsAsFactors = F, header=T)
+
+projquiz <- read.csv("./data/pml-testing.csv", na.strings=c("NA", ""), stringsAsFactors = F, header=T)
+
+```
+
+
+
+```{r, message=FALSE}
+
+# Remove the colums containing NA observations
+training<- training[, colSums(is.na(training)) == 0]
+projquiz<- projquiz[, colSums(is.na(projquiz)) == 0]
+# The dimensions of the two datasets created for the machine learning exercise 
+str(training)
+dim(training)
+dim(projquiz)
+# Remove the identifying variables. These are not to be included in the prediction algorithms.  
+training <- training[,-c(1:7)]
+projquiz <- projquiz[,-c(1:7)]
+```
+
+##Training and testing the model
+We will divide our dataset into two portions,  one that will be used to build our respective machine learning models and the other used to determine the accuracy of our models. We will allocate 70 percent to the training portion and the remaining 30 percent to the testing portion.
+```{r, message=FALSE}
+#Creating the data partitions. The training data will be 70% and the testing data will be 30%. 
+inTrain <- createDataPartition(training$classe, p=0.7, list=F)
+trainset <- training[inTrain, ]
+testset <-  training[-inTrain,]
+```
+
+Dimension and the variable names of the training set. The first seven variables listed in the relevant dataset are removed.
+```{r}
+dim(trainset)
+head(trainset)
+
+```
+##Correlation Matrix
+A correlation matrix is plotted to determine the most correlated features. Positive correlations are plotted in blue color and the negative correlations are plotted in red color. In other words, the plot will help show the relationship that exists between different variables/features. The correlation uses the first principal component (FPC) order.
+```{r, message=FALSE}
+# Creating the correlation matrix
+library(corrplot)
+correlation_mat <- cor(trainset[, -53])
+par(mar=c(5.1,4.1,5,2.1))
+corrplot(correlation_mat, order="FPC", method="color", type="lower", tl.cex=0.7, tl.col=rgb(0,0,0))
+```
+
+The variables or features that report a correlation with another variable/feature of at least 0.7 are presented below.
+```{r, message=FALSE}
+correlated <- findCorrelation(correlation_mat, cutoff=0.7)
+names(trainset)[correlated]
+
+```
+## The Machine Learning Models
+We will use the following machine learning algorithms:
+
+1. Decision Trees using rpart package 
+2. Gradient Boosting Algorithm using GBM method
+3. Random Forest
+The random forest provides us with the greatest accuracy. The following models include the respective confusion matrices that highlight accuracy and the value of kappa. The train control uses the cross-validation method with 5 number of folds or number of resampling iterations. 
+
+### Decision Trees
+```{r, message=FALSE}
+# RPART Decision Tree Algorithm
+fitControl <- trainControl(method = "cv", number = 5, verboseIter = F, allowParallel = T)
+model_rpart <- train(as.factor(classe)~., data=trainset, method="rpart", trControl=fitControl)
+predict_rpart <- predict(model_rpart, newdata=testset)
+conf_rpart <- confusionMatrix(predict_rpart, as.factor(testset$classe))
+conf_rpart
+fancyRpartPlot(model_rpart$finalModel, main="Decision Tree from RPART Algorithm")
+```
+
+The numbers shown in the nodes are the predicted values for each class at a particular activity. The decision tree has not only a poor accuracy but fails to identify D as well as gives the highest probability to A. The following results should provide us with greater evidence. 
+
+### Gradient Boosting Algorithms
+Boosting provides a 'boost' to the weak learners to attain the level of performance of more powerful learners. Each additional cluster in this method should perform better than by random chance. As the number of boosting iterations increases, the accuracy increases. The same can be said for the max tree depth shown as three separate lines.
+```{r, message=FALSE}
+# Gradient Boosting Method (GBM) Algorithm
+fitControl <- trainControl(method = "cv", number = 5, verboseIter = F, allowParallel = T)
+model_gbm <- train(as.factor(classe)~., data=trainset, method="gbm", trControl=fitControl)
+predict_gbm <- predict(model_gbm, newdata=testset)
+conf_gbm <- confusionMatrix(predict_gbm, as.factor(testset$classe))
+conf_gbm
+plot(model_gbm, main="Accuracy of Gradient Boosting Method")
+```
+
+
+### Random Forest
+Random forest is often useful when there are a large number of features. This method works well as it selects only the most important of all features and is less prone to overfitting. As the number of features increases beyond 28 (approximately), the accuracy falls. 
+```{r, message=FALSE}
+# Random Forest Algorithm
+fitControl <- trainControl(method = "cv", number = 5, verboseIter = F, allowParallel = T)
+model_rf <- train(as.factor(classe)~., data=trainset, method="rf", trControl=fitControl)
+stopCluster(cluster)
+registerDoSEQ()
+predict_rf <- predict(model_rf, newdata=testset)
+conf_rf <- confusionMatrix(predict_rf, as.factor(testset$classe))
+conf_rf
+plot(model_rf, main="Accuracy of Random Forest Algorithm")
+# Important features
+important_features <- varImp(model_rf)
+# Twenty most important features
+important_features
+
+```
+## Report the Accuracy and the Out-of-Sample Error
+```{r, echo=FALSE, message=FALSE,  results = 'hide'}
+# Reporting the accuracy of the three algorithms
+
+conf_rpart$overall['Accuracy']
+conf_rf$overall['Accuracy']
+conf_gbm$overall['Accuracy']
+
+```
+The accuracy of each of the algorithm is summarized in the following box and whisker plot. It is observed that the random forest algorithm has the highest level of accuracy. The kappa statistics tells us how much better is the chosen classifier in performance compared to simple guesses at random. Random forest reports the highest value for kappa as well. 
+```{r, message=FALSE}
+# Presenting the accuracy of the three algorithms in box and whisker plot
+results <- resamples((list(RPART=model_rpart, GBM=model_gbm, RF=model_rf)))
+scales <- list(x=list(relation="free"), y=list(relation="free"))
+bwplot(results, scales=scales, main="Accuracy and Kappa Values for each Model")
+```
+
+
+```{r, message=FALSE}
+# Reporting the out-of-sample error of the three algorithms
+accuracy_rpart <- sum(predict_rpart ==testset$classe)/length(predict_rpart)
+outofsampleerror_rpart <- 1-accuracy_rpart
+accuracy_gbm <- sum(predict_gbm ==testset$classe)/length(predict_gbm)
+outofsampleerror_gbm <- 1-accuracy_gbm
+accuracy_rf <- sum(predict_rf ==testset$classe)/length(predict_rf)
+outofsampleerror_rf <- 1-accuracy_rf
+```
+The accuracy for RPART is `r conf_rpart$overall['Accuracy']` and the out-of-sample error is `r outofsampleerror_rpart`.The accuracy for GBM is `r conf_gbm$overall['Accuracy']` and the out-of-sample error is `r outofsampleerror_gbm`. The accuracy for random forest is `r conf_rf$overall['Accuracy']` and the out-of-sample error is `r outofsampleerror_rf`. Therefore, we prefer the random forest as the appropriate algorithm.
+
+##Conclusion.
+The random forest machine learning algorithm results in `r conf_rf$overall['Accuracy']` accuracy and `r outofsampleerror_rf` out-of-sample error. Both the acurracy and kappa favor the random forest algorithm.
+
+
+# Results for the Prediction Quiz.
+
+```{r, message=FALSE}
+# The answers to the poject prediction quiz portion. 
+predict_quiz <- predict(model_rf, newdata=projquiz)
+predict_quiz
+```
+
+##Code
+```{r, ref.label=knitr::all_labels()[-1],echo=TRUE,eval=FALSE, linewidth=80}
+```
